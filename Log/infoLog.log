@@ -1,0 +1,7 @@
+2019-11-07 13:51:00,359 root         INFO     Info from main
+2019-11-07 13:51:00,359 root         WARNING  Warning from main
+2019-11-07 13:51:00,359 root         ERROR    Error from main
+2019-11-07 13:51:00,359 root         CRITICAL Critical from main
+2019-11-07 13:51:00,359 Testing01    INFO     Info by Testing01
+2019-11-07 13:51:00,359 Testing02    INFO     Info by Testing02
+2019-11-07 13:51:00,360 Testing01    WARNING  Warning by Testing01
