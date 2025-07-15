@@ -1,0 +1,6 @@
+gevent==25.5.1
+greenlet==3.2.3
+setuptools==80.9.0
+websocket==0.2.1
+zope.event==5.1
+zope.interface==7.2
