@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# 環境變數可調整:
+#   PORT / HOST / CLIENTS / COUNT / MODE / SEND_INTERVAL / MEM_INTERVAL
+HOST=172.17.0.1
+PORT=5555
+CLIENTS=10
+COUNT=10
+MODE=persistent
+
+sleep 10
+echo Start clients...
+python3 socket/multi_client.py --ip $HOST --port $PORT --clients $CLIENTS --count $COUNT --mode $MODE

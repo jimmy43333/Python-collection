@@ -1,0 +1,33 @@
+version: "3.9"
+services:
+  socket_server:
+    image: bu11-sw-nexus01:8082/ros2:v3.1
+    container_name: socket_server
+    working_dir: /workspace
+    volumes:
+      - ../../:/workspace:rw
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PATH=/workspace/.venv/bin:$PATH
+    command: ["bash", "-c", "./Experiments/socket_test/server_start.sh"]
+    ports:
+      - "5555:5555"
+    tty: true
+
+  socket_client:
+    image: bu11-sw-nexus01:8082/ros2:v3.1
+    container_name: socket_client
+    working_dir: /workspace
+    volumes:
+      - ../../:/workspace:rw
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PATH=/workspace/.venv/bin:$PATH
+    depends_on:
+      - socket_server
+    command: ["bash", "-c", "./Experiments/socket_test/client_start.sh"]
+    tty: true
+# 使用方式:
+#   cd experiment/socket_test
+#   docker compose up
+# 可用環境變數覆蓋: PORT, HOST, CLIENTS, COUNT, MODE, SEND_INTERVAL, INTERVAL

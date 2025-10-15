@@ -7,6 +7,8 @@ Memory Monitor Library
 import psutil
 import time
 from datetime import datetime
+import csv
+import os
 
 
 class MemoryMonitor:
@@ -19,10 +21,12 @@ class MemoryMonitor:
             process = psutil.Process(pid)
             memory_info = process.memory_info()
             memory_percent = process.memory_percent()
+            cmdline = process.cmdline() or []
+            cmdline_join_lower = ' '.join(cmdline).lower()
 
             return {
                 'pid': pid,
-                'name': process.name(),
+                'name': cmdline_join_lower,
                 'rss': memory_info.rss,  # 實際記憶體使用量 (bytes)
                 'vms': memory_info.vms,  # 虛擬記憶體使用量 (bytes)
                 'percent': memory_percent,  # 記憶體使用百分比
@@ -105,6 +109,32 @@ class MemoryMonitor:
         print(f"交換空間使用率: {swap.percent}%")
         print("=" * 50)
 
+    def get_processes_by_name(self, process_name):
+        """取得符合名稱或命令列關鍵字的所有進程資訊 (單次)
+        支援:
+        - 可執行檔名稱 (如: python3)
+        - 腳本檔名 (如: simple_server.py)
+        - 命令列任意參數關鍵字
+        回傳的 name 會在偵測到 .py 腳本時以腳本檔名取代，方便顯示。
+        """
+        keyword = process_name.lower()
+        matched = []
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'memory_info', 'memory_percent']):
+            try:
+                info = proc.info
+                cmdline = info.get('cmdline') or []
+                name_lower = (info.get('name') or '').lower()
+                cmdline_join_lower = ' '.join(cmdline).lower()
+
+                # 是否匹配: 可執行檔名 / 任一參數 / 整體命令列
+                if("memory_monitor.py" not in cmdline_join_lower):  # 忽略本程式
+                    if (keyword in name_lower) or (keyword in cmdline_join_lower):
+                        info['cmdline'] = cmdline_join_lower  # 用腳本檔名覆蓋顯示
+                        matched.append(info)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        return matched
+
     def monitor_process(self, pid, interval=1):
         """持續監控指定進程"""
         print(f"開始監控 PID {pid} 的記憶體使用情況 (每 {interval} 秒更新一次)")
@@ -141,17 +171,6 @@ class MemoryMonitor:
         except KeyboardInterrupt:
             print("\n監控已停止")
 
-    def get_processes_by_name(self, process_name):
-        """取得符合名稱的所有進程資訊 (單次)"""
-        matched = []
-        for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'memory_percent']):
-            try:
-                if process_name.lower() in proc.info['name'].lower():
-                    matched.append(proc.info)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        return matched
-
     def monitor_process_by_name(self, process_name, interval=2, top_count=None):
         """根據進程名稱持續監控記憶體, 可選擇只列出前 top_count 個，並顯示總匹配數"""
         print(f"監控進程名稱關鍵字: {process_name}")
@@ -183,3 +202,144 @@ class MemoryMonitor:
                 time.sleep(interval)
         except KeyboardInterrupt:
             print("監控已停止")
+
+    def monitor_process_log(self, pid, interval=1, log_file='monitor_pid.csv', log_interval=None):
+        """僅寫入指定 PID 進程記憶體使用情況到 CSV (不輸出終端)
+        第一行: cmdline,<完整命令列>
+        第二行(表頭): timestamp,rss,vms,percent,status
+        後續行: 寫入各次資料 (rss/vms 為人類可讀格式)
+        會追蹤最大 rss / vms 並在結束時輸出。
+        """
+        if log_interval is None:
+            log_interval = interval
+        next_log_time = time.time()
+        header = ['timestamp', 'rss', 'vms', 'percent', 'status']
+        file_exists = os.path.exists(log_file) and os.path.getsize(log_file) > 0
+        max_rss = 0
+        max_vms = 0
+        ended = False
+        try:
+            with open(log_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    try:
+                        proc_obj = psutil.Process(pid)
+                        cmdline_list = proc_obj.cmdline() or []
+                        cmdline_str = ' '.join(cmdline_list)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        cmdline_str = ''
+                    writer.writerow(['cmdline', cmdline_str])
+                    writer.writerow(header)
+                while True:
+                    now = time.time()
+                    info = self.get_process_memory_info(pid)
+                    if info is None:
+                        writer.writerow([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), '', '', '', 'ENDED'])
+                        f.flush()
+                        ended = True
+                        break
+                    # 每 interval 更新最大值
+                    if info['rss'] > max_rss:
+                        max_rss = info['rss']
+                    if info['vms'] > max_vms:
+                        max_vms = info['vms']
+                    # 達到 log_interval 時寫入
+                    if now >= next_log_time:
+                        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        writer.writerow([ts, self.format_bytes(info['rss']), self.format_bytes(info['vms']), f"{info['percent']:.2f}", info['status']])
+                        f.flush()
+                        next_log_time = now + log_interval
+                    time.sleep(interval)
+        except KeyboardInterrupt:
+            print("監控已停止")
+        finally:
+            # 直接讀取第一行並附加最大值資訊 (不重新取得 cmdline)
+            summary_added = False
+            try:
+                with open(log_file, 'r+', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    if lines and 'max_rss,' not in lines[0]:
+                        lines[0] = lines[0].rstrip('\n') + f",max_rss,{self.format_bytes(max_rss)},max_vms,{self.format_bytes(max_vms)}\n"
+                        f.seek(0)
+                        f.writelines(lines)
+                        f.truncate()
+                        summary_added = True
+            except Exception:
+                pass
+            print(f"PID {pid} 最大 RSS: {self.format_bytes(max_rss)} 最大 VMS: {self.format_bytes(max_vms)}" + (" (進程已結束)" if ended else "") + (" (已寫入檔案)" if summary_added else ""))
+
+    def monitor_process_by_name_log(self, process_name, interval=2, top_count=None, log_file='monitor_name.csv', log_interval=None):
+        """根據名稱/腳本關鍵字記錄符合的進程記憶體資訊到多個 CSV 檔 (不輸出終端)
+        每個 PID 一個檔案: <PID>_<log_file>
+        第一行: cmdline,<完整命令列>
+        第二行(表頭): timestamp,rss,vms,percent,status
+        後續行寫入資料，追蹤最大 rss / vms，Ctrl+C 時輸出所有 PID 最大值摘要。
+        """
+        if log_interval is None:
+            log_interval = interval
+        next_log_time = time.time()
+        base_dir = os.path.dirname(log_file)
+        base_name = os.path.basename(log_file)
+        header = ['timestamp', 'rss', 'vms', 'percent', 'status']
+        max_map = {}  # pid -> {'rss': int, 'vms': int}
+        try:
+            while True:
+                now = time.time()
+                all_found = self.get_processes_by_name(process_name)
+                all_found.sort(key=lambda p: p['memory_info'].rss, reverse=True)
+                display_list = all_found if not top_count else all_found[:top_count]
+                # 每 interval 更新最大值
+                for proc in display_list:
+                    pid = proc['pid']
+                    rss_b = proc['memory_info'].rss
+                    # memory_info 可能有 vms
+                    vms_b = getattr(proc['memory_info'], 'vms', 0)
+                    if pid not in max_map:
+                        max_map[pid] = {'rss': rss_b, 'vms': vms_b}
+                    else:
+                        if rss_b > max_map[pid]['rss']:
+                            max_map[pid]['rss'] = rss_b
+                        if vms_b > max_map[pid]['vms']:
+                            max_map[pid]['vms'] = vms_b
+                if now >= next_log_time:
+                    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    for proc in display_list:
+                        pid = proc['pid']
+                        rss_bytes = proc['memory_info'].rss
+                        vms_bytes = getattr(proc['memory_info'], 'vms', 0)
+                        try:
+                            p_obj = psutil.Process(pid)
+                            status = p_obj.status()
+                            cmdline_list = p_obj.cmdline() or []
+                        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                            status = 'unknown'
+                            cmdline_list = []
+                        cmdline_str = ' '.join(cmdline_list)
+                        per_file = os.path.join(base_dir, f"{pid}_{base_name}") if base_dir else f"{pid}_{base_name}"
+                        file_exists = os.path.exists(per_file) and os.path.getsize(per_file) > 0
+                        with open(per_file, 'a', newline='', encoding='utf-8') as f:
+                            writer = csv.writer(f)
+                            if not file_exists:
+                                writer.writerow(['cmdline', cmdline_str])
+                                writer.writerow(header)
+                            writer.writerow([ts, self.format_bytes(rss_bytes), self.format_bytes(vms_bytes), f"{proc['memory_percent']:.2f}", status])
+                    next_log_time = now + log_interval
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("監控已停止")
+        finally:
+            print("最大記憶體使用摘要:")
+            for pid, vals in sorted(max_map.items(), key=lambda x: x[1]['rss'], reverse=True):
+                print(f"  PID {pid}: 最大 RSS {self.format_bytes(vals['rss'])} 最大 VMS {self.format_bytes(vals['vms'])}")
+                per_file = os.path.join(base_dir, f"{pid}_{base_name}") if base_dir else f"{pid}_{base_name}"
+                try:
+                    if os.path.exists(per_file):
+                        with open(per_file, 'r+', encoding='utf-8') as f:
+                            lines = f.readlines()
+                            if lines and 'max_rss,' not in lines[0]:
+                                lines[0] = lines[0].rstrip('\n') + f",max_rss,{self.format_bytes(vals['rss'])},max_vms,{self.format_bytes(vals['vms'])}\n"
+                                f.seek(0)
+                                f.writelines(lines)
+                                f.truncate()
+                except Exception:
+                    pass
