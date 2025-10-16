@@ -9,7 +9,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PATH=/workspace/.venv/bin:$PATH
-    command: ["bash", "-c", "./Experiments/socket_test/server_start.sh"]
+    command: ["bash", "-c", "./Experiment/socket_test/server_start.sh"]
     ports:
       - "5555:5555"
     tty: true
@@ -25,7 +25,7 @@ services:
       - PATH=/workspace/.venv/bin:$PATH
     depends_on:
       - socket_server
-    command: ["bash", "-c", "./Experiments/socket_test/client_start.sh"]
+    command: ["bash", "-c", "./Experiment/socket_test/client_start.sh"]
     tty: true
 # 使用方式:
 #   cd experiment/socket_test

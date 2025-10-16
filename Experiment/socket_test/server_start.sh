@@ -8,4 +8,5 @@ PORT=5555
 MEM_INTERVAL=${INTERVAL:-1}
 
 echo Start server...
-python3 socket/simple_server.py --ip $HOST --port "$PORT"
+python3 socket/threadPool_server.py --ip $HOST --port "$PORT"
+# python3 socket/simple_server.py --ip $HOST --port "$PORT"

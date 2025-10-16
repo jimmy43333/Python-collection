@@ -12,11 +12,12 @@
 3. 每個 client 的訊息內容帶有 client 編號與序號便於分辨
 4. --mode 選擇 persistent 或 reconnect
 5. log 會記錄不同 client 的傳送與回應結果 (socket_multi_client.log)
+6. 以 --messagelength 指定每個封包最終字串總長度; 程式會自動以 '0' padding 補在前面, 後綴為 -clientX-seqY
 
 使用範例:
-    python multi_client.py --ip 127.0.0.1 --port 5000 --clients 5 --count 100 --message "ping" --interval 0.01
-    python multi_client.py --clients 3 --count 0 --message test --mode persistent
-    python multi_client.py --clients 2 --count 50 --message hi --mode reconnect --interval 0.005
+    python multi_client.py --ip 127.0.0.1 --port 5000 --clients 5 --count 100 --messagelength 64 --interval 0.01
+    python multi_client.py --clients 3 --count 0 --messagelength 32 --mode persistent
+    python multi_client.py --clients 2 --count 50 --messagelength 16 --mode reconnect --interval 0.005
 """
 import socket
 import threading
@@ -36,26 +37,13 @@ BUFFER_SIZE = 4096
 logger = get_logger('socket_multi_client', logfile=os.path.join(LOG_DIR, 'socket_multi_client.log'))
 
 
-def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Multi-thread TCP socket client")
-    p.add_argument('--ip', default='127.0.0.1', help='Server host (default 127.0.0.1)')
-    p.add_argument('-p', '--port', type=int, default=5000, help='Server port (default 5000)')
-    p.add_argument('-c', '--clients', type=int, default=1, help='同時建立連線/執行緒數量 (default 1)')
-    p.add_argument('--count', type=int, default=10, help='每個連線欲傳送的封包數量 (0 代表持續傳送)')
-    p.add_argument('-m', '--message', default='hello', help='基本訊息字串前綴 (default hello)')
-    p.add_argument('--interval', type=float, default=0.05, help='每次送出後睡眠秒數 (default 0.05)')
-    p.add_argument('--timeout', type=float, default=5.0, help='連線/每次建立逾時秒數 (default 5)')
-    p.add_argument('--mode', choices=['persistent', 'reconnect'], default='persistent', help='連線模式 persistent 或 reconnect (default persistent)')
-    return p.parse_args(argv)
-
-
 class ClientWorker(threading.Thread):
-    def __init__(self, cid: int, host: str, port: int, base_msg: str, count: int, interval: float, timeout: float, mode: str, stop_event: threading.Event):
+    def __init__(self, cid: int, host: str, port: int, target_length: int, count: int, interval: float, timeout: float, mode: str, stop_event: threading.Event):
         super().__init__(daemon=True)
         self.cid = cid
         self.host = host
         self.port = port
-        self.base_msg = base_msg
+        self.target_length = target_length  # 最終欲達成的字串長度
         self.count = count
         self.interval = interval
         self.timeout = timeout
@@ -71,6 +59,18 @@ class ClientWorker(threading.Thread):
         else:
             self._run_reconnect()
 
+    def _compose_msg(self, seq: int) -> str:
+        # 後綴識別資訊
+        suffix = f"-client{self.cid}-seq{seq}"
+        pad_len = self.target_length - len(suffix)
+        if pad_len < 0:
+            # 指定長度不足以包含後綴, 發出警告一次 (僅第一個溢出)
+            if seq == 0:
+                logger.warning(f"target_length={self.target_length} < suffix_len={len(suffix)}; 封包會超過指定長度")
+            return suffix  # 無法截斷識別資訊, 直接返回
+        padding = 'x' * pad_len
+        return padding + suffix
+
     def _run_persistent(self):
         try:
             with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
@@ -79,7 +79,7 @@ class ClientWorker(threading.Thread):
                 while not self.stop_event.is_set():
                     if self.count > 0 and i >= self.count:
                         break
-                    msg = f"{self.base_msg}-client{self.cid}-seq{i}"
+                    msg = self._compose_msg(i)
                     try:
                         sock.sendall((msg + "\n").encode())
                         self.sent += 1
@@ -96,8 +96,8 @@ class ClientWorker(threading.Thread):
                     i += 1
                     if self.interval > 0:
                         time.sleep(self.interval)
-                    elif self.count == 0:
-                        time.sleep(0)
+                    else:
+                        time.sleep(0.01)
         except Exception as e:
             self.errors += 1
             logger.error(f"[client {self.cid}] CONNECT_ERROR {e}")
@@ -110,20 +110,19 @@ class ClientWorker(threading.Thread):
         while not self.stop_event.is_set():
             if self.count > 0 and i >= self.count:
                 break
-            msg = f"{self.base_msg}-client{self.cid}-seq{i}"
+            msg = self._compose_msg(i)
             try:
                 with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
-                    logger.debug(f"[client {self.cid}] OPEN seq={i}")
+                    # logger.debug(f"[client {self.cid}] OPEN seq={i}")
                     sock.sendall((msg + "\n").encode())
                     self.sent += 1
                     data = sock.recv(BUFFER_SIZE)
                     if data:
                         reply = data.decode(errors='ignore').strip()
                         self.received += 1
-                    # 連線自動關閉 (with)
             except Exception as e:
                 self.errors += 1
-                logger.error(f"[client {self.cid}] RECONNECT_ERROR seq={i} {e}")
+                # logger.error(f"[client {self.cid}] RECONNECT_ERROR seq={i} {e}")
             i += 1
             if self.interval > 0:
                 time.sleep(self.interval)
@@ -131,19 +130,30 @@ class ClientWorker(threading.Thread):
                 time.sleep(0)
         logger.info(f"[client {self.cid}] FINISH mode=reconnect sent={self.sent} recv={self.received} errors={self.errors}")
 
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Multi-thread TCP socket client")
+    p.add_argument('--ip', default='127.0.0.1', help='Server host (default 127.0.0.1)')
+    p.add_argument('-p', '--port', type=int, default=5000, help='Server port (default 5000)')
+    p.add_argument('-c', '--clients', type=int, default=1, help='同時建立連線/執行緒數量 (default 1)')
+    p.add_argument('--count', type=int, default=10, help='每個連線欲傳送的封包數量 (0 代表持續傳送)')
+    p.add_argument('-ml', '--messagelength', type=int, default=32, help='每個封包最終字串總長度 (default 32)')
+    p.add_argument('--interval', type=float, default=0.05, help='每次送出後睡眠秒數 (default 0.05)')
+    p.add_argument('--timeout', type=float, default=5.0, help='連線/每次建立逾時秒數 (default 5)')
+    p.add_argument('--mode', choices=['persistent', 'reconnect'], default='persistent', help='連線模式 persistent 或 reconnect (default persistent)')
+    return p.parse_args(argv)
 
 def main(argv: Optional[list] = None) -> int:
     args = parse_args(argv)
     stop_event = threading.Event()
 
     workers = [
-        ClientWorker(cid=i + 1, host=args.ip, port=args.port, base_msg=args.message,
+        ClientWorker(cid=i + 1, host=args.ip, port=args.port, target_length=args.messagelength,
                      count=args.count, interval=args.interval,
                      timeout=args.timeout, mode=args.mode, stop_event=stop_event)
         for i in range(args.clients)
     ]
 
-    logger.info(f"START multi-client host={args.ip} port={args.port} clients={args.clients} count={args.count} interval={args.interval} mode={args.mode}")
+    logger.info(f"START multi-client host={args.ip} port={args.port} clients={args.clients} count={args.count} interval={args.interval} mode={args.mode} messagelength={args.messagelength}")
 
     try:
         for w in workers:
