@@ -86,3 +86,83 @@ python main/memory_monitor.py -s --once -t 0
 - `百分比`：佔系統總記憶體比例
 - `PID`：進程識別碼
 - `狀態`：進程狀態 (running / sleeping 等)
+
+#### websocket_server.py / websocket_client.py
+
+簡單的 WebSocket 範例，提供一個可在背景執行的廣播伺服器與一個接收/發送訊息的客戶端。
+
+###### 功能摘要
+
+- 伺服器 (`socket/websocket_server.py`)
+	- 後台 Thread 啟動 asyncio WebSocket 伺服器
+	- 支援廣播訊息給所有已連線客戶端
+	- 可選擇加上 `require_ack` 產生 `message_id`（目前僅送出，不含自動重送邏輯展示）
+	- CLI 互動輸入：在主執行緒輸入文字即廣播
+- 客戶端 (`socket/websocket_client.py`)
+	- 連線到伺服器後先送出一則 JSON 訊息
+	- 持續接收伺服器廣播並列印
+
+###### 啟動伺服器
+
+```bash
+python socket/websocket_server.py
+```
+
+啟動後會顯示：
+
+```
+[WS] Server listening on ws://0.0.0.0:8765
+[WS] Server thread started
+[WS] Input mode: type message to broadcast, or 'quit' to exit.
+>
+```
+
+在 `>` 提示符下輸入任意文字（例如 `hello`）就會廣播：
+
+```
+> hello
+[WS] Broadcasting message to 1 clients
+```
+
+輸入 `quit` / `exit` / `q` 結束伺服器。
+
+###### 啟動客戶端
+
+於另一個終端視窗執行：
+
+```bash
+python socket/websocket_client.py
+```
+
+成功連線會看到：
+
+```
+==================================================
+簡單 WebSocket 客戶端
+==================================================
+✓ 已連接到 ws://0.0.0.0:8765
+✓ 已發送消息: {'type': 'message', 'content': 'Hello from client!'}
+✓ 收到回應: {"type": "message", "time": "2025-12-01T12:34:56.789Z", "text": "hello"}
+```
+
+###### 範例廣播程式呼叫
+
+若在其他程式中使用伺服器並以程式碼廣播：
+
+```python
+from socket.websocket_server import WebSocketServer
+
+ws = WebSocketServer(port=8765)
+ws.start()
+
+ws.broadcast({"type": "message", "text": "from code"})
+# 要求 ACK 的訊息
+ws.broadcast({"type": "update", "payload": 123}, require_ack=True)
+```
+
+###### 注意事項
+
+- 若出現 `ConnectionRefusedError`，確認伺服器已先啟動且使用相同 `host` / `port`。
+- 廣播資料格式為 JSON 字串；客戶端可自行擴充解析不同 `type`。
+- 目前 ACK 資料結構已建立，實際重送/超時機制可視需求延伸。
+- 修改預設連線埠可在建立伺服器時指定 `port` 參數。

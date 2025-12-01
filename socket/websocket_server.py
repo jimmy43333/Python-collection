@@ -7,11 +7,12 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Set, Dict
 import websockets
-from websockets.server import WebSocketServerProtocol
-import random
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
+import threading
+import time
 import uuid
 
 logging.basicConfig(
@@ -120,7 +121,7 @@ class WebSocketServer:
             async for message in websocket:
                 await self._handle_client_message(websocket, message)
 
-        except ConnectionClosed:
+        except (ConnectionClosedOK, ConnectionClosedError):
             self.log(f"[WS] Client {client_id} disconnected")
 
         except Exception as e:
@@ -139,6 +140,7 @@ class WebSocketServer:
         """Worker that sends queued messages to all clients"""
         while True:
             msg = await self.message_queue.get()
+            self.log(f"[WS] Broadcasting message to {len(self.clients)} clients")
 
             if not self.clients:
                 continue
@@ -222,37 +224,55 @@ class WebSocketServer:
 
         self.log("[WS] Server stopped")
 
-    def get_stats(self):
-        """Get server statistics"""
-        return {
-            "connected_clients": len(self.clients),
-            "pending_messages": len(self.pending_messages),
-            "server_running": self.server is not None and not self.server.is_serving() if hasattr(self.server, 'is_serving') else True
-        }
-
-
-async def main():
-    """主函數"""
-    server = IndependentWebSocketServer(host='0.0.0.0', port=8765)
-
-    try:
-        await server.start()
-    except KeyboardInterrupt:
-        logger.info('\n✓ Server stopped by user')
-    except Exception as e:
-        logger.error(f'Server error: {e}')
-
 
 if __name__ == '__main__':
+    def _input_loop(server: WebSocketServer):
+        """Blocking CLI to send messages; type 'quit' to exit."""
+        print("[WS] Input mode: type message to broadcast, or 'quit' to exit.")
+        while True:
+            try:
+                text = input('> ').strip()
+            except EOFError:
+                # Ctrl-D
+                text = 'quit'
+
+            if not text:
+                continue
+
+            if text.lower() in ("quit", "exit", ":q", "q"):
+                break
+
+            # Broadcast plain text payload; clients can parse JSON if needed
+            # Use ISO8601 UTC format for time (e.g., 2025-12-01T12:34:56.789Z)
+            payload = {
+                "type": "message",
+                # Use timezone-aware UTC datetime (replacement for deprecated utcnow())
+                "time": datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+                "text": text,
+            }
+            server.broadcast(payload, require_ack=False)
+
+        print("[WS] Exiting input mode...")
+
     try:
         # Initialize WebSocket server with ACK support
         websocket_server = WebSocketServer(
-                host=self.host,
-                port=self.port,
-                ack_timeout=5.0,
-                max_retries=3,
-                logger=self.logger
+            host="0.0.0.0",
+            port=8765,
+            ack_timeout=5.0,
+            max_retries=3,
+            logger=logger,
         )
         websocket_server.start()
+
+        # Run blocking input loop in main thread to "lock" the program
+        _input_loop(websocket_server)
+
     except KeyboardInterrupt:
         print('\nShutting down...')
+    finally:
+        # Ensure server stops when leaving the input loop
+        try:
+            websocket_server.stop()
+        except Exception:
+            pass

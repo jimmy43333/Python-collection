@@ -11,7 +11,7 @@ import websockets
 
 async def simple_client():
     """簡單的 WebSocket 客戶端"""
-    uri = "ws://172.17.0.1:10437"
+    uri = "ws://0.0.0.0:8765"
 
     try:
         # 連接到 WebSocket 服務器
@@ -28,9 +28,13 @@ async def simple_client():
             print(f"✓ 已發送消息: {message}")
 
             # 等待並接收回應
-            response = await websocket.recv()
-            print(f"✓ 收到回應: {response}")
-
+            while True:
+                response = await websocket.recv()
+                print(f"✓ 收到回應: {response}")
+                data = json.loads(response)
+                if data['text'] == "out":
+                    print("✗ 收到退出指令，關閉連接")
+                    break
     except ConnectionRefusedError:
         print("✗ 無法連接到服務器，請確保 WebSocket 服務器正在運行")
     except Exception as e:
