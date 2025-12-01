@@ -41,7 +41,7 @@ def handle_client(conn: socket.socket, addr):
         logger.info(f"CLOSED {addr}")
 
 
-def start_server(host: str, port: int):
+def run_socket_server(host: str, port: int):
     logger.info(f"START Server listening on {host}:{port}")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -68,4 +68,4 @@ def parse_args(argv=None):
 
 if __name__ == "__main__":
     args = parse_args()
-    start_server(args.ip, args.port)
+    run_socket_server(args.ip, args.port)

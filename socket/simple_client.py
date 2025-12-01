@@ -6,6 +6,7 @@ import socket
 import argparse
 import sys
 import os
+import time
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from lib import get_logger
 
@@ -45,21 +46,33 @@ def interactive(sock: socket.socket):
 
 
 def single_message(sock: socket.socket, msg: str):
-    sock.sendall((msg + "\n").encode())
+    sock.sendall((msg).encode())
     data = sock.recv(BUFFER_SIZE)
     logger.info(f"SEND {msg}")
     logger.info("REPLY %s", data.decode(errors="ignore").rstrip())
     print(data.decode(errors="ignore").rstrip())
 
+# data1 = b'A' * 81920 + b'B' * 8192
+# data2 = b'C' * 81920 + b'D' * 8192
+# data3 = b'E' * 81920 + b'F' * 8192
 
 def main():
     args = parse_args()
+    bad_data = '{BBBBBBBBBBBBBBBBBBBBB\{BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\}"}\n'
+    good_data  = '{GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGg\}}'
+    good_data2  = '{"GGGGGGGGGGGGGGGGG\{GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"}\n'
     try:
+        print(len(bad_data))
+        print(len(good_data))
         with socket.create_connection((args.ip, args.port), timeout=10) as sock:
-            if args.message is not None:
-                single_message(sock, args.message)
-            else:
-                interactive(sock)
+            single_message(sock, bad_data)
+            for i in range(30):
+                single_message(sock, good_data)
+                time.sleep(0.01)
+            single_message(sock, good_data2)
+            for i in range(10):
+                single_message(sock, good_data)
+                time.sleep(0.01)
     except Exception as e:
         logger.exception(f"ERROR {e}")
         print(f"[ERROR] {e}")
