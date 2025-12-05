@@ -241,14 +241,20 @@ if __name__ == '__main__':
 
             if text.lower() in ("quit", "exit", ":q", "q"):
                 break
+            action = "update_result"
+            text_data = text
+            if "," in text:
+            	part = text.split(",", 1)
+            	action = part[0].strip()
+            	text_data = part[1].strip()
 
             # Broadcast plain text payload; clients can parse JSON if needed
             # Use ISO8601 UTC format for time (e.g., 2025-12-01T12:34:56.789Z)
             payload = {
-                "type": "message",
+                "action": action,
                 # Use timezone-aware UTC datetime (replacement for deprecated utcnow())
-                "time": datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
-                "text": text,
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+                "data": text_data,
             }
             server.broadcast(payload, require_ack=False)
 
